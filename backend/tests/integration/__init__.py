@@ -1,0 +1,1 @@
+"""Integration foundation tests."""
