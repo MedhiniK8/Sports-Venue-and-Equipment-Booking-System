@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date, time
 from uuid import uuid4
 
 from app.contracts.booking import (
@@ -18,12 +18,17 @@ def test_shared_contracts_construct():
         end=datetime(2026, 11, 23, 18, 30),
     )
     request = BookingRequest(
-        venue_id=uuid4(),
-        interval=interval,
+        court_id=uuid4(),
+        equipment_id=None,
+        date=date(2026, 11, 23),
+        starting_time=time(18, 0),
+        ending_time=time(18, 30),
     )
     response = BookingResponse(
         booking_id=uuid4(),
         status="foundation",
+        court_id=request.court_id,
+        equipment_id=None,
         interval=interval,
     )
     lock = LockToken(token=uuid4(), interval=interval)
