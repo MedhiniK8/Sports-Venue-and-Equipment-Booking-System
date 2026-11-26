@@ -38,6 +38,20 @@ async def test_student_repository_commits_and_reads_account_with_async_sqlite():
         assert isinstance(created.user_id, UUID)
         assert by_usn == created
         assert by_id == created
+
+        updated = await repository.update_student(
+            created.user_id,
+            student_name="Updated Student",
+        )
+        persisted = await repository.get_student_by_id(created.user_id)
+
+        assert updated.student_name == "Updated Student"
+        assert persisted == updated
+        assert updated.usn == created.usn
+        assert updated.college_email == created.college_email
+        assert updated.phone_number == created.phone_number
+        assert updated.branch == created.branch
+        assert updated.role == created.role
     finally:
         await engine.dispose()
 

@@ -66,6 +66,10 @@ class BookingCommittedCacheRefreshError(Exception):
         super().__init__("The booking committed, but availability refresh failed")
 
 
+class CourtAvailabilityNotFoundError(Exception):
+    """The court is missing or inactive."""
+
+
 class BookingCoordinator:
     """Coordinate authenticated student bookings across E1, E2, and E3."""
 
@@ -87,6 +91,56 @@ class BookingCoordinator:
         raise NotImplementedError(
             "Use coordinate_student_booking with the student booking contract"
         )
+
+    async def get_court_availability(
+        self,
+        court_id: UUID,
+        reference_date: date,
+    ):
+        if self.persistence is None:
+            raise RuntimeError("Persistence repository is not configured")
+
+        snapshot = await self.persistence.load_allocation_snapshot(reference_date)
+        if court_id not in snapshot.active_court_ids:
+            raise CourtAvailabilityNotFoundError
+
+        allocation = self._build_allocation_service(snapshot, reference_date)
+        days = []
+        for offset in range(7):
+            booking_date = reference_date + timedelta(days=offset)
+            intervals = allocation.get_court_availability(court_id, booking_date)
+            if intervals is None:
+                raise AllocationSnapshotError(
+                    "Court availability was not generated for the requested date"
+                )
+            days.append((booking_date, intervals))
+        return court_id, reference_date, days
+
+    async def get_equipment_availability(
+        self,
+        equipment_id: UUID,
+        booking_date: date,
+        start_time,
+        end_time,
+    ):
+        if self.persistence is None:
+            raise RuntimeError("Persistence repository is not configured")
+        snapshot = await self.persistence.load_allocation_snapshot(booking_date)
+        allocation = self._build_allocation_service(snapshot, booking_date)
+        interval = TimeInterval(
+            start=datetime.combine(booking_date, start_time),
+            end=datetime.combine(booking_date, end_time),
+        )
+        result = allocation.get_equipment_availability(
+            equipment_id,
+            interval,
+            requested_quantity=1,
+        )
+        if not result.valid and not result.errors:
+            raise AllocationSnapshotError("Equipment availability could not be calculated")
+        if not result.valid and any("Inventory is missing" in error for error in result.errors):
+            raise CourtAvailabilityNotFoundError
+        return result
 
     async def coordinate_student_booking(
         self,
@@ -361,6 +415,7 @@ class BookingCoordinator:
                 CommittedBooking(
                     booking_id=booking.booking_id,
                     court_id=booking.court_id,
+                    owner_id=booking.user_id,
                     interval=TimeInterval(
                         start=datetime.combine(
                             booking.booking_date,

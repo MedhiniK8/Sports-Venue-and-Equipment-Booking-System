@@ -9,6 +9,7 @@ from app.e3_persistence.inputs import (
     EquipmentCatalogRecord,
     SportCatalogRecord,
 )
+from app.e3_persistence.catalog import APPROVED_SPORT_NAMES
 from app.e3_persistence.models import Base, Court, EquipmentItem, Sport
 from app.e3_persistence.repository import SqlAlchemyPersistenceRepository
 
@@ -34,15 +35,16 @@ async def make_catalog_repository():
 
 
 @pytest.mark.asyncio
-async def test_catalog_repository_lists_only_active_sports_and_courts():
+async def test_catalog_repository_lists_active_approved_sports_and_active_courts():
     engine, session_factory, repository = await make_catalog_repository()
     try:
-        active_sport_id, other_sport_id, inactive_sport_id = (
+        active_sport_id, tennis_id, football_id, inactive_sport_id = (
+            uuid4(),
             uuid4(),
             uuid4(),
             uuid4(),
         )
-        active_court_id, inactive_court_id, other_court_id = (
+        active_court_id, inactive_court_id, tennis_court_id = (
             uuid4(),
             uuid4(),
             uuid4(),
@@ -51,7 +53,8 @@ async def test_catalog_repository_lists_only_active_sports_and_courts():
             session.add_all(
                 [
                     Sport(sport_id=active_sport_id, name="Badminton", is_active=True),
-                    Sport(sport_id=other_sport_id, name="Tennis", is_active=True),
+                    Sport(sport_id=tennis_id, name="Tennis", is_active=True),
+                    Sport(sport_id=football_id, name="Football", is_active=True),
                     Sport(sport_id=inactive_sport_id, name="Archived", is_active=False),
                     Court(
                         court_id=active_court_id,
@@ -66,8 +69,8 @@ async def test_catalog_repository_lists_only_active_sports_and_courts():
                         is_active=False,
                     ),
                     Court(
-                        court_id=other_court_id,
-                        sport_id=other_sport_id,
+                        court_id=tennis_court_id,
+                        sport_id=tennis_id,
                         name="Court C",
                         is_active=True,
                     ),
@@ -76,7 +79,6 @@ async def test_catalog_repository_lists_only_active_sports_and_courts():
 
         assert await repository.list_active_sports() == (
             SportCatalogRecord(active_sport_id, "Badminton"),
-            SportCatalogRecord(other_sport_id, "Tennis"),
         )
         assert await repository.list_active_courts_for_sport(active_sport_id) == (
             CourtCatalogRecord(active_court_id, "Court A"),
@@ -86,6 +88,40 @@ async def test_catalog_repository_lists_only_active_sports_and_courts():
             await repository.list_active_courts_for_sport(inactive_sport_id)
             is None
         )
+        assert set(APPROVED_SPORT_NAMES) == {
+            "Basketball",
+            "Badminton",
+            "Table Tennis",
+            "Squash",
+            "Volleyball",
+            "Kabaddi",
+        }
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalog_repository_returns_all_active_approved_sports():
+    engine, session_factory, repository = await make_catalog_repository()
+    try:
+        sport_ids = {
+            name: uuid4()
+            for name in (*APPROVED_SPORT_NAMES, "Football", "Tennis")
+        }
+        async with session_factory.begin() as session:
+            session.add_all(
+                Sport(
+                    sport_id=sport_ids[name],
+                    name=name,
+                    is_active=True,
+                )
+                for name in sport_ids
+            )
+
+        sports = await repository.list_active_sports()
+
+        assert {sport.name for sport in sports} == set(APPROVED_SPORT_NAMES)
+        assert len(sports) == len(APPROVED_SPORT_NAMES)
     finally:
         await engine.dispose()
 

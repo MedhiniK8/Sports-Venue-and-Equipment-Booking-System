@@ -13,9 +13,11 @@ class CreateStudentInput:
     password_hash: str
     college_email: str
     phone_number: str
-    year_of_admission: int
-    gender: str
     branch: str
+    year_of_admission: int | None = None
+    gender: str | None = None
+    student_name: str = ""
+    role: str = "STUDENT"
 
 
 @dataclass(frozen=True)
@@ -25,9 +27,11 @@ class StudentAccountRecord:
     password_hash: str
     college_email: str
     phone_number: str
-    year_of_admission: int
-    gender: str
+    year_of_admission: int | None
+    gender: str | None
     branch: str
+    student_name: str = ""
+    role: str = "STUDENT"
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,7 @@ class BookingSnapshotRecord:
     booking_date: date
     start_time: time
     end_time: time
+    user_id: UUID | None = None
 
 
 @dataclass(frozen=True)

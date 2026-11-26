@@ -103,6 +103,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(() => {
+    api.logout().catch(() => {});
     clearSession(false);
     navigate("/login", { replace: true, state: { notice: "You have signed out." } });
   }, [clearSession, navigate]);

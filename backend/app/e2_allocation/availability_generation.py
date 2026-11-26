@@ -21,6 +21,7 @@ class CommittedBooking(BaseModel):
 
     booking_id: UUID
     court_id: UUID
+    owner_id: UUID | None = None
     interval: TimeInterval
 
 
@@ -79,6 +80,7 @@ def populate_seven_day_availability(
                 interval=interval,
                 status=AvailabilityStatus.BOOKED,
                 reference_id=booking.booking_id,
+                owner_id=booking.owner_id,
             )
         )
 

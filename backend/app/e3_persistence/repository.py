@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..venue_time import current_venue_local_naive, normalize_venue_local_naive
+from .catalog import APPROVED_SPORT_NAMES
 from .errors import (
     BookingAlreadyCancelledError,
     BookingCancellationExpiredError,
@@ -41,6 +42,7 @@ from .models import (
     SlotClaim,
     Sport,
     User,
+    RevokedToken,
 )
 from .session import get_session_factory
 
@@ -57,6 +59,50 @@ class PersistenceRepository(Protocol):
     async def get_student_by_id(
         self, user_id: UUID
     ) -> StudentAccountRecord | None: ...
+
+    async def get_student_by_identifier(
+        self, identifier: str
+    ) -> StudentAccountRecord | None: ...
+
+    async def update_student(
+        self,
+        user_id: UUID,
+        *,
+        student_name: str,
+    ) -> StudentAccountRecord: ...
+
+    async def update_student_password(
+        self,
+        user_id: UUID,
+        password_hash: str,
+    ) -> bool: ...
+
+    async def revoke_token(self, jti: str, expires_at: datetime) -> None: ...
+
+    async def is_token_revoked(self, jti: str) -> bool: ...
+
+    async def list_block_outs(self) -> tuple: ...
+
+    async def create_block_out(
+        self,
+        *,
+        block_out_id: UUID,
+        court_id: UUID,
+        starts_at: datetime,
+        ends_at: datetime,
+        reason: str | None,
+        created_by: UUID,
+    ) -> BlockOut: ...
+
+    async def update_block_out(
+        self,
+        block_out_id: UUID,
+        *,
+        starts_at: datetime,
+        ends_at: datetime,
+        reason: str | None,
+        is_active: bool,
+    ) -> BlockOut | None: ...
 
     async def list_active_sports(self) -> tuple[SportCatalogRecord, ...]: ...
 
@@ -115,10 +161,16 @@ class SqlAlchemyPersistenceRepository:
 
                     user = User(
                         usn=student.usn,
+                        student_name=student.student_name,
+                        role=student.role,
                         password_hash=student.password_hash,
                         college_email=student.college_email,
                         phone_number=student.phone_number,
-                        year_of_admission=student.year_of_admission,
+                        year_of_admission=(
+                            student.year_of_admission
+                            if student.year_of_admission is not None
+                            else None
+                        ),
                         gender=student.gender,
                         branch=student.branch,
                     )
@@ -141,13 +193,176 @@ class SqlAlchemyPersistenceRepository:
             user = await session.get(User, user_id)
             return self._to_student_record(user) if user is not None else None
 
+    async def get_student_by_identifier(
+        self, identifier: str
+    ) -> StudentAccountRecord | None:
+        normalized = identifier.strip().lower()
+        async with self._factory()() as session:
+            user = await session.scalar(
+                select(User).where(
+                    or_(User.usn == identifier.strip(), User.college_email == normalized)
+                )
+            )
+            return self._to_student_record(user) if user is not None else None
+
+    async def update_student(
+        self,
+        user_id: UUID,
+        *,
+        student_name: str,
+    ) -> StudentAccountRecord:
+        try:
+            async with self._factory()() as session:
+                async with session.begin():
+                    user = await session.get(User, user_id, with_for_update=True)
+                    if user is None:
+                        raise BookingResourceUnavailableError(
+                            "Student account is unavailable"
+                        )
+                    user.student_name = student_name
+                    await session.flush()
+                    record = self._to_student_record(user)
+            return record
+        except IntegrityError as error:
+            if self._is_duplicate_key(error):
+                raise DuplicateStudentError("college email") from error
+            raise
+
+    async def update_student_password(
+        self,
+        user_id: UUID,
+        password_hash: str,
+    ) -> bool:
+        async with self._factory()() as session:
+            async with session.begin():
+                user = await session.get(User, user_id, with_for_update=True)
+                if user is None:
+                    return False
+                user.password_hash = password_hash
+                await session.flush()
+                return True
+
+    async def revoke_token(self, jti: str, expires_at: datetime) -> None:
+        async with self._factory()() as session:
+            async with session.begin():
+                session.merge(RevokedToken(jti=jti, expires_at=expires_at))
+                await session.flush()
+
+    async def is_token_revoked(self, jti: str) -> bool:
+        async with self._factory()() as session:
+            revoked = await session.get(RevokedToken, jti)
+            return revoked is not None
+
+    async def list_block_outs(self) -> tuple:
+        async with self._factory()() as session:
+            rows = (
+                await session.scalars(
+                    select(BlockOut).order_by(
+                        BlockOut.starts_at.desc(),
+                        BlockOut.block_out_id,
+                    )
+                )
+            ).all()
+            return tuple(rows)
+
+    async def create_block_out(
+        self,
+        *,
+        block_out_id: UUID,
+        court_id: UUID,
+        starts_at: datetime,
+        ends_at: datetime,
+        reason: str | None,
+        created_by: UUID,
+    ) -> BlockOut:
+        async with self._factory()() as session:
+            async with session.begin():
+                court = await session.scalar(
+                    select(Court).where(
+                        Court.court_id == court_id,
+                        Court.is_active.is_(True),
+                    )
+                )
+                if court is None:
+                    raise BookingResourceUnavailableError(
+                        "Court is missing or inactive"
+                    )
+                block = BlockOut(
+                    block_out_id=block_out_id,
+                    court_id=court_id,
+                    starts_at=starts_at,
+                    ends_at=ends_at,
+                    reason=reason,
+                    created_by=created_by,
+                    is_active=True,
+                )
+                session.add(block)
+                await session.flush()
+                start_minute = starts_at.hour * 60 + starts_at.minute
+                end_minute = ends_at.hour * 60 + ends_at.minute
+                if starts_at.date() == ends_at.date():
+                    session.add_all(
+                        SlotClaim(
+                            court_id=court_id,
+                            slot_date=starts_at.date(),
+                            minute_index=minute,
+                            block_out_id=block_out_id,
+                        )
+                        for minute in range(start_minute, end_minute)
+                    )
+                await session.flush()
+                return block
+
+    async def update_block_out(
+        self,
+        block_out_id: UUID,
+        *,
+        starts_at: datetime,
+        ends_at: datetime,
+        reason: str | None,
+        is_active: bool,
+    ) -> BlockOut | None:
+        async with self._factory()() as session:
+            async with session.begin():
+                block = await session.get(BlockOut, block_out_id, with_for_update=True)
+                if block is None:
+                    return None
+                await session.execute(
+                    delete(SlotClaim).where(
+                        SlotClaim.block_out_id == block_out_id
+                    )
+                )
+                block.starts_at = starts_at
+                block.ends_at = ends_at
+                block.reason = reason
+                block.is_active = is_active
+                if is_active:
+                    if starts_at.date() == ends_at.date():
+                        session.add_all(
+                            SlotClaim(
+                                court_id=block.court_id,
+                                slot_date=starts_at.date(),
+                                minute_index=minute,
+                                block_out_id=block_out_id,
+                            )
+                            for minute in range(
+                                starts_at.hour * 60 + starts_at.minute,
+                                ends_at.hour * 60 + ends_at.minute,
+                            )
+                        )
+                await session.flush()
+                return block
+
     async def list_active_sports(self) -> tuple[SportCatalogRecord, ...]:
         async with self._factory()() as session:
             async with session.begin():
                 sports = (
                     await session.scalars(
                         select(Sport)
-                        .where(Sport.is_active.is_(True))
+                        .where(
+                            Sport.is_active.is_(True),
+                            Sport.name.in_(APPROVED_SPORT_NAMES),
+                        )
                         .order_by(Sport.name, Sport.sport_id)
                     )
                 ).all()
@@ -471,6 +686,7 @@ class SqlAlchemyPersistenceRepository:
                         BookingSnapshotRecord(
                             booking_id=row.booking_id,
                             court_id=row.court_id,
+                            user_id=row.user_id,
                             booking_date=row.booking_date,
                             start_time=row.start_time,
                             end_time=row.end_time,
@@ -636,6 +852,8 @@ class SqlAlchemyPersistenceRepository:
             year_of_admission=user.year_of_admission,
             gender=user.gender,
             branch=user.branch,
+            student_name=getattr(user, "student_name", ""),
+            role=getattr(user, "role", "STUDENT"),
         )
 
     @staticmethod

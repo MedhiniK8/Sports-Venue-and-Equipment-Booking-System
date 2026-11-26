@@ -36,10 +36,12 @@ def make_booking(
     start_minute: int,
     end_hour: int,
     end_minute: int,
+    owner_id: UUID | None = None,
 ) -> CommittedBooking:
     return CommittedBooking(
         booking_id=uuid4(),
         court_id=court_id,
+        owner_id=owner_id,
         interval=make_time_interval(
             booking_date, start_hour, start_minute, end_hour, end_minute
         ),
@@ -165,6 +167,35 @@ def test_multiple_bookings_on_one_date_are_sorted_and_split_free_time():
     ]
     assert spans[1][3] == earlier.booking_id
     assert spans[3][3] == later.booking_id
+
+
+def test_adjacent_bookings_preserve_each_owners_identity():
+    cache = AvailabilityCache()
+    court_id = uuid4()
+    first_owner, second_owner = uuid4(), uuid4()
+    first = make_booking(
+        court_id, REFERENCE_DATE, 9, 0, 10, 0, owner_id=first_owner
+    )
+    second = make_booking(
+        court_id, REFERENCE_DATE, 10, 0, 11, 0, owner_id=second_owner
+    )
+
+    populate_seven_day_availability(
+        cache, [court_id], [first, second], [], REFERENCE_DATE
+    )
+
+    intervals = cache.get_intervals(court_id, REFERENCE_DATE)
+    assert intervals is not None
+    booked = [item for item in intervals if item.status == AvailabilityStatus.BOOKED]
+    assert [(item.interval.start.time(), item.interval.end.time(), item.owner_id) for item in booked] == [
+        (time(9, 0), time(10, 0), first_owner),
+        (time(10, 0), time(11, 0), second_owner),
+    ]
+    assert all(
+        item.owner_id is None
+        for item in intervals
+        if item.status != AvailabilityStatus.BOOKED
+    )
 
 
 def test_block_splits_free_availability():

@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import jwt
 
@@ -39,17 +39,19 @@ class AuthService:
     async def register(
         self,
         *,
+        student_name: str,
         usn: str,
         password: str,
         college_email: str,
         phone_number: str,
-        year_of_admission: int,
-        gender: str,
         branch: str,
+        year_of_admission: int | None = None,
+        gender: str | None = None,
     ) -> StudentAccountRecord:
         return await self._repository.create_student(
             CreateStudentInput(
                 usn=usn,
+                student_name=student_name,
                 password_hash=hash_password(password),
                 college_email=college_email,
                 phone_number=phone_number,
@@ -59,14 +61,43 @@ class AuthService:
             )
         )
 
-    async def login(self, usn: str, password: str) -> tuple[StudentAccountRecord, str]:
-        account = await self._repository.get_student_by_usn(usn)
+    async def login(self, identifier: str, password: str) -> tuple[StudentAccountRecord, str]:
+        account = await self._repository.get_student_by_identifier(identifier)
         if account is None or not verify_password(password, account.password_hash):
             raise InvalidCredentialsError
         return account, self.create_access_token(account.user_id)
 
     async def get_student(self, user_id: UUID) -> StudentAccountRecord | None:
         return await self._repository.get_student_by_id(user_id)
+
+    async def update_student(
+        self,
+        user_id: UUID,
+        *,
+        student_name: str,
+    ) -> StudentAccountRecord:
+        return await self._repository.update_student(
+            user_id,
+            student_name=student_name,
+        )
+
+    async def change_password(
+        self,
+        user_id: UUID,
+        current_password: str,
+        new_password: str,
+    ) -> bool:
+        account = await self._repository.get_student_by_id(user_id)
+        if account is None:
+            return False
+        if not verify_password(current_password, account.password_hash):
+            raise InvalidCredentialsError
+        if hmac.compare_digest(current_password, new_password):
+            raise InvalidCredentialsError
+        return await self._repository.update_student_password(
+            user_id,
+            hash_password(new_password),
+        )
 
     def create_access_token(self, user_id: UUID) -> str:
         self._validate_signing_key()
@@ -78,6 +109,7 @@ class AuthService:
                 "iss": self._issuer,
                 "iat": issued_at,
                 "exp": expires_at,
+                "jti": str(uuid4()),
             },
             self._secret_key,
             algorithm="HS256",
@@ -91,11 +123,37 @@ class AuthService:
                 self._secret_key,
                 algorithms=["HS256"],
                 issuer=self._issuer,
-                options={"require": ["sub", "iss", "iat", "exp"]},
+                options={"require": ["sub", "iss", "iat", "exp", "jti"]},
             )
             return UUID(claims["sub"])
         except (jwt.InvalidTokenError, ValueError, TypeError) as error:
             raise InvalidCredentialsError from error
+
+    def decode_access_token_claims(self, token: str) -> tuple[UUID, str, datetime]:
+        self._validate_signing_key()
+        try:
+            claims = jwt.decode(
+                token,
+                self._secret_key,
+                algorithms=["HS256"],
+                issuer=self._issuer,
+                options={"require": ["sub", "iss", "iat", "exp", "jti"]},
+            )
+            return (
+                UUID(claims["sub"]),
+                str(claims["jti"]),
+                datetime.fromtimestamp(claims["exp"], tz=timezone.utc).replace(tzinfo=None),
+            )
+        except (jwt.InvalidTokenError, ValueError, TypeError, KeyError) as error:
+            raise InvalidCredentialsError from error
+
+    async def revoke_access_token(self, token: str) -> None:
+        _, jti, expires_at = self.decode_access_token_claims(token)
+        await self._repository.revoke_token(jti, expires_at)
+
+    async def is_access_token_revoked(self, token: str) -> bool:
+        _, jti, _ = self.decode_access_token_claims(token)
+        return await self._repository.is_token_revoked(jti)
 
     def _validate_signing_key(self) -> None:
         if len(self._secret_key.encode("utf-8")) < _MIN_JWT_SECRET_BYTES:

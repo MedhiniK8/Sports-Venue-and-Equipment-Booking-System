@@ -48,6 +48,9 @@ class User(Base):
         CheckConstraint(
             "year_of_admission > 0", name="year_of_admission_positive"
         ),
+        CheckConstraint(
+            "role IN ('STUDENT', 'ADMIN')", name="role_allowed"
+        ),
         {"mysql_engine": "InnoDB"},
     )
 
@@ -55,11 +58,13 @@ class User(Base):
         Uuid(as_uuid=True), primary_key=True, default=uuid4
     )
     usn: Mapped[str] = mapped_column(String(50), nullable=False)
+    student_name: Mapped[str] = mapped_column(String(100), nullable=False, server_default="")
+    role: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'STUDENT'"))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     college_email: Mapped[str] = mapped_column(String(254), nullable=False)
     phone_number: Mapped[str] = mapped_column(String(32), nullable=False)
-    year_of_admission: Mapped[int] = mapped_column(Integer, nullable=False)
-    gender: Mapped[str] = mapped_column(String(32), nullable=False)
+    year_of_admission: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gender: Mapped[str | None] = mapped_column(String(32), nullable=True)
     branch: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(), nullable=False, default=_utcnow, server_default=func.current_timestamp()
@@ -67,6 +72,17 @@ class User(Base):
 
     bookings: Mapped[list["Booking"]] = relationship(back_populates="user")
     created_block_outs: Mapped[list["BlockOut"]] = relationship(back_populates="creator")
+
+
+class RevokedToken(Base):
+    __tablename__ = "revoked_token"
+    __table_args__ = (
+        Index("ix_revoked_token_expires_at", "expires_at"),
+        {"mysql_engine": "InnoDB"},
+    )
+
+    jti: Mapped[str] = mapped_column(String(36), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
 
 
 class Sport(Base):

@@ -194,6 +194,7 @@ async def test_booking_repository_claims_minutes_and_enforces_equipment_capacity
             court_three,
         }
         assert len(snapshot.bookings) == 3
+        assert all(booking.user_id == user_id for booking in snapshot.bookings)
         assert len(snapshot.equipment_reservations) == 3
     finally:
         await engine.dispose()

@@ -24,12 +24,12 @@ function jsonResponse(data, status = 200) {
 function studentProfile() {
   return {
     user_id: "b2e59b8c-fb0f-41cc-9a5f-31be4b42b6cd",
+    student_name: "Test Student",
     usn: "1AB23CS001",
     college_email: "student@example.edu",
     phone_number: "9876543210",
-    year_of_admission: 2023,
-    gender: "Prefer not to say",
     branch: "Computer Science",
+    role: "STUDENT",
   };
 }
 
@@ -49,6 +49,7 @@ function authenticatedFetch({
   onCreateBooking,
   bookings = [],
   catalogEquipment = [{ equipment_id: EQUIPMENT_ID, name: "Racket" }],
+  availability,
 } = {}) {
   const fetchMock = vi.fn(async (url, options = {}) => {
     const method = options.method || "GET";
@@ -61,6 +62,26 @@ function authenticatedFetch({
     }
     if (url === "/api/catalog/equipment") {
       return jsonResponse(catalogEquipment);
+    }
+    if (url.startsWith(`/api/courts/${COURT_ID}/availability`)) {
+      return jsonResponse(availability || {
+        court_id: COURT_ID,
+        reference_date: "2027-01-03",
+        timezone: "Asia/Kolkata",
+        opening_time: "06:00:00",
+        closing_time: "20:00:00",
+        days: [
+          {
+            date: "2027-01-03",
+            intervals: [
+              { start_time: "06:00:00", end_time: "09:12:00", status: "FREE" },
+              { start_time: "09:12:00", end_time: "09:27:00", status: "BOOKED", is_mine: true, reference_id: BOOKING_ID },
+              { start_time: "09:27:00", end_time: "10:07:00", status: "BLOCKED", reference_id: "block-id" },
+              { start_time: "10:07:00", end_time: "20:00:00", status: "FREE" },
+            ],
+          },
+        ],
+      });
     }
     if (url === "/api/bookings" && method === "GET") {
       return jsonResponse(bookings);
@@ -124,26 +145,40 @@ describe("student frontend workflow", () => {
     window.sessionStorage.clear();
     renderAt("/register");
 
+    expect(
+      Array.from(document.querySelectorAll(".registration-card form .field > span"))
+        .map((label) => label.textContent),
+    ).toEqual([
+      "Name",
+      "Email",
+      "USN",
+      "Phone Number",
+      "Branch",
+      "Password",
+      "Confirm Password",
+    ]);
+    expect(
+      document.querySelectorAll(".registration-card form .field").length,
+    ).toBe(7);
+
+    await user.type(screen.getByLabelText("Name"), "Test Student");
+    await user.type(screen.getByLabelText("Email"), "Student@Example.edu");
     await user.type(screen.getByLabelText("USN"), "1AB23CS001");
-    await user.type(screen.getByLabelText("College email"), "Student@Example.edu");
-    await user.type(screen.getByLabelText("Password"), "strong-password");
-    await user.type(screen.getByLabelText("Confirm password"), "strong-password");
-    await user.type(screen.getByLabelText("Phone number"), "9876543210");
-    await user.type(screen.getByLabelText("Year of admission"), "2023");
-    await user.type(screen.getByLabelText("Gender"), "Prefer not to say");
+    await user.type(screen.getByLabelText("Phone Number"), "9876543210");
     await user.type(screen.getByLabelText("Branch"), "Computer Science");
+    await user.type(screen.getByLabelText("Password"), "strong-password");
+    await user.type(screen.getByLabelText("Confirm Password"), "strong-password");
     await user.click(screen.getByRole("button", { name: "Create account" }));
 
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Account created");
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      student_name: "Test Student",
       usn: "1AB23CS001",
       password: "strong-password",
       confirm_password: "strong-password",
       college_email: "student@example.edu",
       phone_number: "9876543210",
-      year_of_admission: 2023,
-      gender: "Prefer not to say",
       branch: "Computer Science",
     });
     expect(window.sessionStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
@@ -159,23 +194,35 @@ describe("student frontend workflow", () => {
       if (url === "/api/auth/me") return jsonResponse(studentProfile());
       if (url === "/api/catalog/sports") return jsonResponse([]);
       if (url === "/api/catalog/equipment") return jsonResponse([]);
+      if (url.startsWith("/api/courts/")) return jsonResponse({
+        court_id: "00000000-0000-0000-0000-000000000000",
+        reference_date: "2027-01-03",
+        timezone: "Asia/Kolkata",
+        opening_time: "06:00:00",
+        closing_time: "20:00:00",
+        days: [],
+      });
       return jsonResponse({ detail: "Not found" }, 404);
     });
     vi.stubGlobal("fetch", fetchMock);
     renderAt("/login");
 
-    await user.type(screen.getByLabelText("USN"), "1AB23CS001");
+    await user.type(screen.getByLabelText("USN or college email"), "1AB23CS001");
     await user.type(screen.getByLabelText("Password"), "strong-password");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
-    expect(await screen.findByRole("heading", { name: "Find your court time." })).toBeInTheDocument();
+    const menuButton = await screen.findByRole("button", { name: "Open navigation" });
+    expect(menuButton).toHaveAttribute("aria-expanded", "false");
+    await user.click(menuButton);
+    expect(menuButton).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("link", { name: "Explore" })).toBeInTheDocument();
     expect(window.sessionStorage.getItem(TOKEN_STORAGE_KEY)).toBe(TOKEN);
     const profileCall = fetchMock.mock.calls.find(([url]) => url === "/api/auth/me");
     const sportsCall = fetchMock.mock.calls.find(([url]) => url === "/api/catalog/sports");
     expect(profileCall[1].headers.Authorization).toBe(`Bearer ${TOKEN}`);
     expect(sportsCall[1].headers.Authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-      usn: "1AB23CS001",
+      identifier: "1AB23CS001",
       password: "strong-password",
     });
   });
@@ -183,10 +230,12 @@ describe("student frontend workflow", () => {
   it("loads catalog selections and submits the backend booking shape", async () => {
     const user = userEvent.setup();
     const fetchMock = authenticatedFetch();
-    renderAt("/");
-    await screen.findByRole("heading", { name: "Find your court time." });
+    renderAt("/court-booking");
+    await screen.findByRole("heading", { name: "Make Your Booking Now" });
     await fillBookingForm(user);
     await user.click(screen.getByRole("button", { name: "Submit booking request" }));
+    await screen.findByRole("heading", { name: "Review your booking" });
+    await user.click(screen.getByRole("button", { name: "Confirm Booking" }));
 
     expect(await screen.findByRole("heading", { name: "You’re all set." })).toBeInTheDocument();
     expect(screen.getByText("Court A")).toBeInTheDocument();
@@ -203,6 +252,45 @@ describe("student frontend workflow", () => {
       equipment: [{ equipment_id: EQUIPMENT_ID, quantity: 2 }],
     });
     expect(bookingCall[1].headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("renders seven real availability days and supports arbitrary free intervals", async () => {
+    const user = userEvent.setup();
+    const days = Array.from({ length: 7 }, (_, offset) => {
+      const date = new Date(Date.UTC(2027, 0, 3 + offset, 12));
+      return {
+        date: date.toISOString().slice(0, 10),
+        intervals: [
+          { start_time: "06:00:00", end_time: "09:12:00", status: "FREE" },
+          { start_time: "09:12:00", end_time: "09:27:00", status: "BOOKED", is_mine: true, reference_id: BOOKING_ID },
+          { start_time: "09:27:00", end_time: "10:07:00", status: "BLOCKED", reference_id: "block-id" },
+          { start_time: "10:07:00", end_time: "20:00:00", status: "FREE" },
+        ],
+      };
+    });
+    authenticatedFetch({
+      availability: {
+        court_id: COURT_ID,
+        reference_date: "2027-01-03",
+        timezone: "Asia/Kolkata",
+        opening_time: "06:00:00",
+        closing_time: "20:00:00",
+        days,
+      },
+    });
+    renderAt("/court-booking");
+    await screen.findByRole("heading", { name: "Make Your Booking Now" });
+
+    await user.selectOptions(screen.getByLabelText("Sport"), SPORT_ID);
+    await screen.findByRole("option", { name: "Court A" });
+    await user.selectOptions(screen.getByLabelText("Court"), COURT_ID);
+
+    expect(await screen.findByText("Seven-day availability")).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/My booking:/).length).toBeGreaterThanOrEqual(7);
+    expect(screen.getAllByLabelText(/BLOCKED:/).length).toBeGreaterThanOrEqual(7);
+    expect(screen.getAllByText(/06:00 – 09:12/).length).toBeGreaterThanOrEqual(7);
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("Seven-day availability")).toBeInTheDocument();
   });
 
   it("shows all shortages and resubmits the unchanged equipment with the continue decision", async () => {
@@ -238,14 +326,16 @@ describe("student frontend workflow", () => {
           : jsonResponse(bookingRecord([]), 201);
       },
     });
-    renderAt("/");
-    await screen.findByRole("heading", { name: "Find your court time." });
+    renderAt("/court-booking");
+    await screen.findByRole("heading", { name: "Make Your Booking Now" });
     await fillBookingForm(user);
     await user.click(screen.getByRole("checkbox", { name: "Tennis balls" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "Quantity for Tennis balls" }), {
       target: { value: "4" },
     });
     await user.click(screen.getByRole("button", { name: "Submit booking request" }));
+    await screen.findByRole("heading", { name: "Review your booking" });
+    await user.click(screen.getByRole("button", { name: "Confirm Booking" }));
 
     expect(await screen.findByRole("dialog")).toHaveTextContent("Racket");
     expect(screen.getByRole("dialog")).toHaveTextContent("Tennis balls");
@@ -284,10 +374,12 @@ describe("student frontend workflow", () => {
         }],
       }, 409),
     });
-    renderAt("/");
-    await screen.findByRole("heading", { name: "Find your court time." });
+    renderAt("/court-booking");
+    await screen.findByRole("heading", { name: "Make Your Booking Now" });
     await fillBookingForm(user);
     await user.click(screen.getByRole("button", { name: "Submit booking request" }));
+    await screen.findByRole("heading", { name: "Review your booking" });
+    await user.click(screen.getByRole("button", { name: "Confirm Booking" }));
     await screen.findByRole("dialog");
     await user.click(screen.getByRole("button", { name: "Cancel request" }));
 
@@ -324,10 +416,12 @@ describe("student frontend workflow", () => {
         }, 409);
       },
     });
-    renderAt("/");
-    await screen.findByRole("heading", { name: "Find your court time." });
+    renderAt("/court-booking");
+    await screen.findByRole("heading", { name: "Make Your Booking Now" });
     await fillBookingForm(user);
     await user.click(screen.getByRole("button", { name: "Submit booking request" }));
+    await screen.findByRole("heading", { name: "Review your booking" });
+    await user.click(screen.getByRole("button", { name: "Confirm Booking" }));
     await screen.findByRole("dialog");
     await user.click(screen.getByRole("button", { name: "Continue without unavailable equipment" }));
 
@@ -347,10 +441,12 @@ describe("student frontend workflow", () => {
         message: "Request cancelled; no booking was created.",
       }, 200),
     });
-    renderAt("/");
-    await screen.findByRole("heading", { name: "Find your court time." });
+    renderAt("/court-booking");
+    await screen.findByRole("heading", { name: "Make Your Booking Now" });
     await fillBookingForm(user, { equipment: false });
     await user.click(screen.getByRole("button", { name: "Submit booking request" }));
+    await screen.findByRole("heading", { name: "Review your booking" });
+    await user.click(screen.getByRole("button", { name: "Confirm Booking" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("No booking created");
     expect(screen.queryByText("Booking confirmed")).not.toBeInTheDocument();
@@ -370,10 +466,12 @@ describe("student frontend workflow", () => {
         },
       }, 503),
     });
-    renderAt("/");
-    await screen.findByRole("heading", { name: "Find your court time." });
+    renderAt("/court-booking");
+    await screen.findByRole("heading", { name: "Make Your Booking Now" });
     await fillBookingForm(user, { equipment: false });
     await user.click(screen.getByRole("button", { name: "Submit booking request" }));
+    await screen.findByRole("heading", { name: "Review your booking" });
+    await user.click(screen.getByRole("button", { name: "Confirm Booking" }));
 
     expect(await screen.findByText(/Your booking was committed/i)).toBeInTheDocument();
     expect(screen.getByText(BOOKING_ID)).toBeInTheDocument();
@@ -398,10 +496,13 @@ describe("student frontend workflow", () => {
     const bookingCard = screen.getByText(BOOKING_ID).closest("article");
     expect(within(bookingCard).getByText("BOOKED")).toBeInTheDocument();
     await user.click(within(bookingCard).getByRole("button", { name: "Cancel booking" }));
+    await user.click(screen.getByRole("button", { name: "Cancel Booking" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("was cancelled");
-    expect(within(bookingCard).getByText("CANCELLED")).toBeInTheDocument();
-    expect(within(bookingCard).queryByRole("button", { name: "Cancel booking" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancelled" }));
+    const cancelledCard = screen.getByText(BOOKING_ID).closest("article");
+    expect(within(cancelledCard).getByText("CANCELLED")).toBeInTheDocument();
+    expect(within(cancelledCard).queryByRole("button", { name: "Cancel booking" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(
       ([url, options]) => url === `/api/bookings/${BOOKING_ID}` && options.method === "DELETE",
     )).toBe(true);
@@ -426,7 +527,7 @@ describe("student frontend workflow", () => {
       throw new TypeError("fetch failed");
     }));
     renderAt("/login");
-    await user.type(screen.getByLabelText("USN"), "1AB23CS001");
+    await user.type(screen.getByLabelText("USN or college email"), "1AB23CS001");
     await user.type(screen.getByLabelText("Password"), "strong-password");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 

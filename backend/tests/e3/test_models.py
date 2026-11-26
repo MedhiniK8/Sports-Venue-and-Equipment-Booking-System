@@ -17,6 +17,7 @@ def test_e3_metadata_contains_expected_mysql_tables_and_constraints():
         "equipment_item",
         "equipment_allocation",
         "block_out",
+        "revoked_token",
     }
 
     assert set(Base.metadata.tables) == expected_tables
@@ -55,6 +56,7 @@ def test_e3_metadata_contains_expected_mysql_tables_and_constraints():
         if isinstance(constraint, CheckConstraint)
     } == {
         "ck_users_year_of_admission_positive",
+        "ck_users_role_allowed",
         "ck_equipment_item_total_quantity_nonnegative",
         "ck_booking_time_interval",
         "ck_booking_minute_precision",

@@ -1,5 +1,6 @@
 export const TOKEN_STORAGE_KEY = "sportsVenueAccessToken";
 export const AUTH_EXPIRED_EVENT = "sports-venue-auth-expired";
+export const AVAILABILITY_CHANGED_EVENT = "sports-venue-availability-changed";
 
 export class ApiError extends Error {
   constructor(message, status, body) {
@@ -81,6 +82,18 @@ export const api = {
     return request("/auth/me", { token });
   },
 
+  updateProfile(payload) {
+    return request("/auth/me", { method: "PATCH", body: payload });
+  },
+
+  changePassword(payload) {
+    return request("/auth/change-password", { method: "POST", body: payload });
+  },
+
+  logout() {
+    return request("/auth/logout", { method: "POST" });
+  },
+
   getSports() {
     return request("/catalog/sports");
   },
@@ -93,6 +106,26 @@ export const api = {
     return request("/catalog/equipment");
   },
 
+  getEquipmentAvailability(equipmentId, bookingDate, startTime, endTime) {
+    const params = new URLSearchParams({
+      booking_date: bookingDate,
+      start_time: startTime,
+      end_time: endTime,
+    });
+    return request(
+      `/catalog/equipment/${encodeURIComponent(equipmentId)}/availability?${params}`,
+    );
+  },
+
+  getCourtAvailability(courtId, referenceDate) {
+    const query = referenceDate
+      ? `?reference_date=${encodeURIComponent(referenceDate)}`
+      : "";
+    return request(
+      `/courts/${encodeURIComponent(courtId)}/availability${query}`,
+    );
+  },
+
   createBooking(payload) {
     return request("/bookings", { method: "POST", body: payload });
   },
@@ -103,6 +136,27 @@ export const api = {
 
   cancelBooking(bookingId) {
     return request(`/bookings/${encodeURIComponent(bookingId)}`, {
+      method: "DELETE",
+    });
+  },
+
+  getBlockOuts() {
+    return request("/admin/block-outs");
+  },
+
+  createBlockOut(payload) {
+    return request("/admin/block-outs", { method: "POST", body: payload });
+  },
+
+  updateBlockOut(blockOutId, payload) {
+    return request(`/admin/block-outs/${encodeURIComponent(blockOutId)}`, {
+      method: "PATCH",
+      body: payload,
+    });
+  },
+
+  deactivateBlockOut(blockOutId) {
+    return request(`/admin/block-outs/${encodeURIComponent(blockOutId)}`, {
       method: "DELETE",
     });
   },
