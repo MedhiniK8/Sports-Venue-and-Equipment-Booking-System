@@ -16,6 +16,7 @@ from app.e3_persistence.errors import (
 )
 from app.e3_persistence.inputs import (
     AllocationSnapshot,
+    BlockOutSnapshotRecord,
     BookingRecord,
     BookingSnapshotRecord,
     CreateBookingInput,
@@ -23,6 +24,7 @@ from app.e3_persistence.inputs import (
     EquipmentReservationSnapshotRecord,
 )
 from app.e4_communication.coordinator import (
+    AllocationSnapshotError,
     BookingAvailabilityError,
     BookingCommittedCacheRefreshError,
     BookingCoordinator,
@@ -902,4 +904,129 @@ async def test_cancellation_refresh_failure_reports_commit_and_releases_lock():
         "snapshot",
         "release",
     ]
+
+
+@pytest.mark.asyncio
+async def test_availability_read_returns_free_booked_and_blocked_segments():
+    events: list[str] = []
+    court_id, equipment_id, owner_id = uuid4(), uuid4(), uuid4()
+    booking_id = uuid4()
+    block_id = uuid4()
+    reference_date = date.today() + timedelta(days=1)
+    persistence = FakePersistence(events, court_id, equipment_id)
+    persistence.snapshot_overrides = [
+        AllocationSnapshot(
+            active_court_ids=(court_id,),
+            bookings=(
+                BookingSnapshotRecord(
+                    booking_id=booking_id,
+                    court_id=court_id,
+                    booking_date=reference_date,
+                    start_time=time(9, 0),
+                    end_time=time(10, 0),
+                    user_id=owner_id,
+                ),
+            ),
+            blocks=(
+                BlockOutSnapshotRecord(
+                    block_out_id=block_id,
+                    court_id=court_id,
+                    starts_at=datetime.combine(reference_date, time(13, 15)),
+                    ends_at=datetime.combine(reference_date, time(14, 0)),
+                ),
+            ),
+            equipment_inventory=(),
+            equipment_reservations=(),
+        )
+    ]
+    coordinator = BookingCoordinator(persistence=persistence)
+
+    returned_court, returned_date, days = await coordinator.get_court_availability(
+        court_id,
+        reference_date,
+    )
+
+    assert returned_court == court_id
+    assert returned_date == reference_date
+    assert len(days) == 7
+    intervals = days[0][1]
+    assert [(item.status.value, item.interval.start.time(), item.interval.end.time()) for item in intervals] == [
+        ("FREE", time(6, 0), time(9, 0)),
+        ("BOOKED", time(9, 0), time(10, 0)),
+        ("FREE", time(10, 0), time(13, 15)),
+        ("BLOCKED", time(13, 15), time(14, 0)),
+        ("FREE", time(14, 0), time(20, 0)),
+    ]
+    assert intervals[1].owner_id == owner_id
+    assert intervals[3].owner_id is None
+
+
+@pytest.mark.asyncio
+async def test_availability_read_supports_adjacent_arbitrary_minute_intervals():
+    events: list[str] = []
+    court_id, equipment_id = uuid4(), uuid4()
+    reference_date = date.today() + timedelta(days=1)
+    persistence = FakePersistence(events, court_id, equipment_id)
+    persistence.snapshot_overrides = [
+        AllocationSnapshot(
+            active_court_ids=(court_id,),
+            bookings=(
+                BookingSnapshotRecord(
+                    uuid4(), court_id, reference_date, time(9, 12), time(9, 27)
+                ),
+                BookingSnapshotRecord(
+                    uuid4(), court_id, reference_date, time(9, 27), time(10, 7)
+                ),
+            ),
+            blocks=(),
+            equipment_inventory=(),
+            equipment_reservations=(),
+        )
+    ]
+    coordinator = BookingCoordinator(persistence=persistence)
+
+    _, _, days = await coordinator.get_court_availability(court_id, reference_date)
+    intervals = days[0][1]
+
+    assert [
+        (
+            item.status.value,
+            item.interval.start.strftime("%H:%M"),
+            item.interval.end.strftime("%H:%M"),
+        )
+        for item in intervals
+    ] == [
+        ("FREE", "06:00", "09:12"),
+        ("BOOKED", "09:12", "09:27"),
+        ("BOOKED", "09:27", "10:07"),
+        ("FREE", "10:07", "20:00"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_availability_read_rejects_overlapping_persisted_intervals():
+    events: list[str] = []
+    court_id, equipment_id = uuid4(), uuid4()
+    reference_date = date.today() + timedelta(days=1)
+    persistence = FakePersistence(events, court_id, equipment_id)
+    persistence.snapshot_overrides = [
+        AllocationSnapshot(
+            active_court_ids=(court_id,),
+            bookings=(
+                BookingSnapshotRecord(
+                    uuid4(), court_id, reference_date, time(9, 0), time(10, 0)
+                ),
+                BookingSnapshotRecord(
+                    uuid4(), court_id, reference_date, time(9, 30), time(10, 30)
+                ),
+            ),
+            blocks=(),
+            equipment_inventory=(),
+            equipment_reservations=(),
+        )
+    ]
+    coordinator = BookingCoordinator(persistence=persistence)
+
+    with pytest.raises(AllocationSnapshotError):
+        await coordinator.get_court_availability(court_id, reference_date)
     assert coordinator._allocation_revision == -1

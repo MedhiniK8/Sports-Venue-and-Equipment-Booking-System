@@ -2,16 +2,22 @@ import React from "react";
 import {
   BrowserRouter,
   Link,
+  NavLink,
   Navigate,
   Outlet,
   Route,
   Routes,
+  useNavigate,
 } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
+import AboutUsPage from "./pages/AboutUsPage";
+import AdminPage from "./pages/AdminPage";
 import BookingHistoryPage from "./pages/BookingHistoryPage";
-import DashboardPage from "./pages/DashboardPage";
+import CourtBookingPage from "./pages/DashboardPage";
+import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import RegistrationPage from "./pages/RegistrationPage";
+import SettingsPage from "./pages/SettingsPage";
 
 function LoadingScreen({ children = "Preparing your student account…" }) {
   return (
@@ -20,6 +26,14 @@ function LoadingScreen({ children = "Preparing your student account…" }) {
       {children}
     </div>
   );
+}
+
+function ExploreRedirect() {
+  const navigate = useNavigate();
+  React.useEffect(() => {
+    navigate("/", { replace: true, state: { scrollToExplore: true } });
+  }, [navigate]);
+  return null;
 }
 
 function RequireStudent() {
@@ -47,6 +61,13 @@ function RequireStudent() {
   return <Outlet />;
 }
 
+function RequireAdmin() {
+  const { student } = useAuth();
+  if (!student) return <Navigate to="/login" replace />;
+  if (student.role !== "ADMIN") return <Navigate to="/" replace />;
+  return <Outlet />;
+}
+
 function PublicOnly({ children }) {
   const { student, loading } = useAuth();
   if (loading) {
@@ -60,36 +81,90 @@ function PublicOnly({ children }) {
 
 function SiteLayout() {
   const { student, logout } = useAuth();
+  const [menuOpen, setMenuOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!menuOpen) return undefined;
+    function closeOnEscape(event) {
+      if (event.key === "Escape") setMenuOpen(false);
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [menuOpen]);
+
   return (
     <div className="app-shell">
-      <header className="site-header">
-        <Link aria-label="Campus Play home" className="brand" to="/">
-          <span className="brand-mark" aria-hidden="true">CP</span>
-          <span className="brand-copy">
-            <strong>Campus Play</strong>
-            <small>Sports venue booking</small>
-          </span>
-        </Link>
-        <nav aria-label="Main navigation" className="main-nav">
-          {student ? (
-            <>
-              <Link to="/">Book a court</Link>
-              <Link to="/bookings">My bookings</Link>
-              <span className="student-greeting">
-                <span className="avatar" aria-hidden="true">{student.usn?.slice(-2) ?? "ST"}</span>
-                <span>{student.usn}</span>
+      {student ? (
+        <>
+          <header className="authenticated-header">
+            <button
+              aria-expanded={menuOpen}
+              aria-label="Open navigation"
+              className="menu-button"
+              onClick={() => setMenuOpen(true)}
+              type="button"
+            >
+              <span />
+              <span />
+              <span />
+            </button>
+            <Link aria-label="SportsHub home" className="brand brand-header" to="/">
+              <img alt="" src="/images/branding/sportshub-logo.svg" />
+              <span className="brand-copy">
+                <strong>SportsHub</strong>
+                <small>University Sports Booking</small>
               </span>
-              <button className="nav-logout" onClick={logout} type="button">Sign out</button>
-            </>
-          ) : (
-            <>
-              <Link to="/login">Sign in</Link>
-              <Link className="nav-register" to="/register">Create account</Link>
-            </>
+            </Link>
+          </header>
+          {menuOpen && (
+            <button
+              aria-label="Close navigation backdrop"
+              className="sidebar-backdrop"
+              onClick={() => setMenuOpen(false)}
+              type="button"
+            />
           )}
-        </nav>
-      </header>
-      <main className="main-content">
+          <aside className={`app-sidebar${menuOpen ? " is-open" : ""}`} aria-hidden={!menuOpen}>
+            <div className="sidebar-top">
+              <Link aria-label="SportsHub home" className="brand" to="/" onClick={() => setMenuOpen(false)}>
+                <img alt="" src="/images/branding/sportshub-logo.svg" />
+                <span className="brand-copy">
+                  <strong>SportsHub</strong>
+                  <small>University Sports Booking</small>
+                </span>
+              </Link>
+              <button aria-label="Close navigation" className="sidebar-close" onClick={() => setMenuOpen(false)} type="button">×</button>
+            </div>
+            <nav aria-label="Main navigation" className="sidebar-nav">
+              <NavLink end to="/" onClick={() => setMenuOpen(false)}>Home</NavLink>
+              <NavLink to="/explore" onClick={() => setMenuOpen(false)}>Explore</NavLink>
+              <NavLink to="/court-booking" onClick={() => setMenuOpen(false)}>Court Booking</NavLink>
+              <NavLink to="/bookings" onClick={() => setMenuOpen(false)}>My Bookings</NavLink>
+              <NavLink to="/settings" onClick={() => setMenuOpen(false)}>Settings</NavLink>
+              <NavLink to="/about" onClick={() => setMenuOpen(false)}>About Us</NavLink>
+              {student.role === "ADMIN" && (
+                <NavLink to="/admin" onClick={() => setMenuOpen(false)}>Admin</NavLink>
+              )}
+            </nav>
+            <button className="nav-logout sidebar-logout" onClick={logout} type="button">Logout</button>
+          </aside>
+        </>
+      ) : (
+        <header className="site-header">
+          <Link aria-label="SportsHub home" className="brand" to="/login">
+            <img alt="" src="/images/branding/sportshub-logo.svg" />
+            <span className="brand-copy">
+              <strong>Campus Play</strong>
+              <small>Sports venue booking</small>
+            </span>
+          </Link>
+          <nav aria-label="Public navigation" className="main-nav">
+            <Link to="/login">Sign in</Link>
+            <Link className="nav-register" to="/register">Create account</Link>
+          </nav>
+        </header>
+      )}
+      <main className={student ? "main-content protected-content" : "main-content"}>
         <Routes>
           <Route
             element={
@@ -108,14 +183,21 @@ function SiteLayout() {
             path="/register"
           />
           <Route element={<RequireStudent />}>
-            <Route element={<DashboardPage />} path="/" />
+            <Route element={<HomePage />} path="/" />
+            <Route element={<ExploreRedirect />} path="/explore" />
+            <Route element={<CourtBookingPage />} path="/court-booking" />
             <Route element={<BookingHistoryPage />} path="/bookings" />
+            <Route element={<SettingsPage />} path="/settings" />
+            <Route element={<AboutUsPage />} path="/about" />
+            <Route element={<RequireAdmin />}>
+              <Route element={<AdminPage />} path="/admin" />
+            </Route>
           </Route>
           <Route element={<Navigate replace to="/" />} path="*" />
         </Routes>
       </main>
       <footer className="site-footer">
-        <span>Campus Play</span>
+        <span>SportsHub</span>
         <span>Venue times shown in Asia/Kolkata</span>
       </footer>
     </div>

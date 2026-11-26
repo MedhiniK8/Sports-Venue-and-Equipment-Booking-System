@@ -22,6 +22,7 @@ class AvailabilityInterval(BaseModel):
     interval: TimeInterval
     status: AvailabilityStatus
     reference_id: Optional[UUID] = None
+    owner_id: Optional[UUID] = None
 
     @model_validator(mode="after")
     def validate_reference(self) -> "AvailabilityInterval":

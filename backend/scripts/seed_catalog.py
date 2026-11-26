@@ -9,6 +9,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from sqlalchemy import select
 
+from app.e3_persistence.catalog import APPROVED_SPORT_NAMES
 from app.e3_persistence.models import Sport, Court, EquipmentItem
 from app.e3_persistence.session import get_session_factory, dispose_engine
 
@@ -19,27 +20,24 @@ from app.e3_persistence.session import get_session_factory, dispose_engine
 # --------------------------------------------------
 
 SPORTS_AND_COURTS = {
+    "Basketball": [
+        "Basketball Court 1",
+    ],
     "Badminton": [
         "Badminton Court 1",
         "Badminton Court 2",
     ],
-    "Basketball": [
-        "Basketball Court 1",
-    ],
-    "Volleyball": [
-        "Volleyball Court 1",
-    ],
-    "Football": [
-        "Football Ground 1",
-    ],
-    "Tennis": [
-        "Tennis Court 1",
-    ],
     "Table Tennis": [
         "Table Tennis Room 1",
     ],
+    "Squash": [
+        "Squash Court 1",
+    ],
     "Kabaddi": [
         "Kabaddi Ground 1",
+    ],
+    "Volleyball": [
+        "Volleyball Court 1",
     ],
 }
 
@@ -54,9 +52,6 @@ EQUIPMENT_INVENTORY = {
     "Shuttlecock": 50,
     "Basketball": 5,
     "Volleyball": 5,
-    "Football": 5,
-    "Tennis Racket": 6,
-    "Tennis Ball": 30,
     "Table Tennis Bat": 8,
     "Table Tennis Ball": 50,
     "Football Goalkeeper Gloves": 2,
@@ -69,6 +64,8 @@ async def seed_catalog():
     added_sports = 0
     added_courts = 0
     added_equipment = 0
+    deactivated_sports = 0
+    reactivated_sports = 0
 
     async with factory() as session:
         async with session.begin():
@@ -86,9 +83,18 @@ async def seed_catalog():
                 for sport in existing_sports
             }
 
-            for sport_name in SPORTS_AND_COURTS:
+            approved_sport_names = set(APPROVED_SPORT_NAMES)
+            for sport in existing_sports:
+                should_be_active = sport.name in approved_sport_names
+                if sport.is_active and not should_be_active:
+                    deactivated_sports += 1
+                elif not sport.is_active and should_be_active:
+                    reactivated_sports += 1
+                sport.is_active = should_be_active
+
+            for sport_name in APPROVED_SPORT_NAMES:
                 if sport_name not in sports_by_name:
-                    sport = Sport(name=sport_name)
+                    sport = Sport(name=sport_name, is_active=True)
                     session.add(sport)
                     sports_by_name[sport_name] = sport
                     added_sports += 1
@@ -99,7 +105,8 @@ async def seed_catalog():
             # 2. Insert missing courts
             # --------------------------------------
 
-            for sport_name, court_names in SPORTS_AND_COURTS.items():
+            for sport_name in APPROVED_SPORT_NAMES:
+                court_names = SPORTS_AND_COURTS[sport_name]
                 sport = sports_by_name[sport_name]
 
                 existing_courts = (
@@ -157,10 +164,12 @@ async def seed_catalog():
     print("\nCatalog seeding completed successfully!")
     print("---------------------------------------")
     print(f"Sports added:    {added_sports}")
+    print(f"Sports activated: {reactivated_sports}")
+    print(f"Sports deactivated: {deactivated_sports}")
     print(f"Courts added:    {added_courts}")
     print(f"Equipment added: {added_equipment}")
     print("---------------------------------------")
-    print("Existing records were left unchanged.")
+    print("Existing sports were preserved; active flags were reconciled.")
 
 
 async def main():

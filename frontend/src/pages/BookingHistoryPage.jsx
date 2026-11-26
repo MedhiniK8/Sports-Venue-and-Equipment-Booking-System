@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, getApiErrorMessage } from "../api";
+import {
+  api,
+  AVAILABILITY_CHANGED_EVENT,
+  getApiErrorMessage,
+} from "../api";
 import { isBookingCancelable, formatBookingTime, formatVenueDate } from "../venueTime";
 
 function EquipmentList({ items, equipmentNames }) {
@@ -29,6 +33,8 @@ export default function BookingHistoryPage() {
   const [notice, setNotice] = useState("");
   const [actionError, setActionError] = useState("");
   const [cancellingId, setCancellingId] = useState("");
+  const [pendingCancellation, setPendingCancellation] = useState(null);
+  const [activeTab, setActiveTab] = useState("upcoming");
 
   const refreshBookings = useCallback(async () => {
     setLoading(true);
@@ -97,11 +103,6 @@ export default function BookingHistoryPage() {
   );
 
   async function handleCancel(booking) {
-    const confirmed = window.confirm(
-      `Cancel booking ${booking.booking_id}? This cannot be undone.`,
-    );
-    if (!confirmed) return;
-
     setCancellingId(booking.booking_id);
     setActionError("");
     setNotice("");
@@ -116,6 +117,7 @@ export default function BookingHistoryPage() {
         ),
       );
       setNotice(`Booking ${booking.booking_id} was cancelled.`);
+      window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
     } catch (error) {
       const detail = error.body?.detail;
       if (
@@ -133,13 +135,26 @@ export default function BookingHistoryPage() {
         setNotice(
           `Booking ${booking.booking_id} was cancelled. Availability may need refreshing.`,
         );
+        window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
       } else {
         setActionError(getApiErrorMessage(error.status, error.body));
       }
     } finally {
       setCancellingId("");
+      setPendingCancellation(null);
     }
   }
+
+  const nowDate = new Date().toISOString().slice(0, 10);
+  const visibleBookings = sortedBookings.filter((booking) => {
+    if (activeTab === "cancelled") return booking.status === "CANCELLED";
+    if (activeTab === "past") {
+      return booking.status !== "CANCELLED" &&
+        `${booking.booking_date}T${booking.end_time}` < nowDate;
+    }
+    return booking.status === "BOOKED" &&
+      `${booking.booking_date}T${booking.end_time}` >= nowDate;
+  });
 
   return (
     <section className="history-page">
@@ -149,7 +164,7 @@ export default function BookingHistoryPage() {
           <h1>My bookings</h1>
           <p>Review your reservations and manage eligible bookings.</p>
         </div>
-        <Link className="button button-primary" to="/">Book a court</Link>
+        <Link className="button button-primary" to="/court-booking">Book a court</Link>
       </div>
 
       {notice && <div className="notice notice-success" role="status">{notice}</div>}
@@ -167,11 +182,20 @@ export default function BookingHistoryPage() {
           <span className="empty-icon" aria-hidden="true">▤</span>
           <h2>No bookings yet</h2>
           <p>Your confirmed reservations will appear here.</p>
-          <Link className="button button-primary" to="/">Explore sports</Link>
+          <Link className="button button-primary" to="/court-booking">Explore sports</Link>
         </div>
       ) : (
+        <>
+          <div className="history-tabs" aria-label="Booking categories">
+            <button className={activeTab === "upcoming" ? "is-active" : ""} onClick={() => setActiveTab("upcoming")} type="button">Upcoming / Current</button>
+            <button className={activeTab === "past" ? "is-active" : ""} onClick={() => setActiveTab("past")} type="button">Past</button>
+            <button className={activeTab === "cancelled" ? "is-active" : ""} onClick={() => setActiveTab("cancelled")} type="button">Cancelled</button>
+          </div>
+          {visibleBookings.length === 0 ? (
+            <div className="empty-state"><h2>No bookings in this category</h2><p>Choose another tab or create a new reservation.</p></div>
+          ) : (
         <div className="history-list">
-          {sortedBookings.map((booking) => {
+          {visibleBookings.map((booking) => {
             const cancelable = isBookingCancelable(booking);
             return (
               <article className="history-card" key={booking.booking_id}>
@@ -207,7 +231,7 @@ export default function BookingHistoryPage() {
                     <button
                       className="button button-danger-outline"
                       disabled={cancellingId === booking.booking_id}
-                      onClick={() => void handleCancel(booking)}
+                      onClick={() => setPendingCancellation(booking)}
                       type="button"
                     >
                       {cancellingId === booking.booking_id ? "Cancelling…" : "Cancel booking"}
@@ -217,6 +241,23 @@ export default function BookingHistoryPage() {
               </article>
             );
           })}
+        </div>
+          )}
+        </>
+      )}
+      {pendingCancellation && (
+        <div className="dialog-backdrop" role="presentation">
+          <section aria-labelledby="cancel-title" aria-modal="true" className="decision-dialog" role="dialog">
+            <p className="eyebrow">Confirm cancellation</p>
+            <h2 id="cancel-title">Cancel this booking?</h2>
+            <p className="dialog-copy">
+              {courtNames.get(pendingCancellation.court_id) ?? "This court"} · {formatVenueDate(pendingCancellation.booking_date)} · {formatBookingTime(pendingCancellation.start_time)}–{formatBookingTime(pendingCancellation.end_time)}
+            </p>
+            <div className="decision-actions">
+              <button className="button button-danger-outline" disabled={cancellingId === pendingCancellation.booking_id} onClick={() => void handleCancel(pendingCancellation)} type="button">Cancel Booking</button>
+              <button className="button button-quiet" disabled={Boolean(cancellingId)} onClick={() => setPendingCancellation(null)} type="button">Keep Booking</button>
+            </div>
+          </section>
         </div>
       )}
     </section>

@@ -30,6 +30,7 @@ JWT_SECRET = "test-only-signing-key-with-at-least-32-bytes"
 class InMemoryStudentRepository:
     def __init__(self) -> None:
         self.accounts: dict[UUID, StudentAccountRecord] = {}
+        self.revoked: set[str] = set()
 
     async def create_student(
         self, student: CreateStudentInput
@@ -45,6 +46,8 @@ class InMemoryStudentRepository:
         account = StudentAccountRecord(
             user_id=uuid4(),
             usn=student.usn,
+            student_name=student.student_name,
+            role=student.role,
             password_hash=student.password_hash,
             college_email=student.college_email,
             phone_number=student.phone_number,
@@ -64,6 +67,60 @@ class InMemoryStudentRepository:
     async def get_student_by_id(self, user_id: UUID) -> StudentAccountRecord | None:
         return self.accounts.get(user_id)
 
+    async def get_student_by_identifier(self, identifier: str) -> StudentAccountRecord | None:
+        normalized = identifier.strip().lower()
+        return next(
+            (
+                account
+                for account in self.accounts.values()
+                if account.usn == identifier.strip()
+                or account.college_email.lower() == normalized
+            ),
+            None,
+        )
+
+    async def update_student(
+        self,
+        user_id: UUID,
+        *,
+        student_name: str,
+    ) -> StudentAccountRecord:
+        account = self.accounts[user_id]
+        updated = StudentAccountRecord(
+            user_id=user_id,
+            usn=account.usn,
+            password_hash=account.password_hash,
+            college_email=account.college_email,
+            phone_number=account.phone_number,
+            year_of_admission=account.year_of_admission,
+            gender=account.gender,
+            branch=account.branch,
+            student_name=student_name,
+            role=account.role,
+        )
+        self.accounts[user_id] = updated
+        return updated
+
+    async def update_student_password(
+        self,
+        user_id: UUID,
+        password_hash: str,
+    ) -> bool:
+        account = self.accounts[user_id]
+        self.accounts[user_id] = StudentAccountRecord(
+            **{
+                **account.__dict__,
+                "password_hash": password_hash,
+            }
+        )
+        return True
+
+    async def revoke_token(self, jti: str, expires_at) -> None:
+        self.revoked.add(jti)
+
+    async def is_token_revoked(self, jti: str) -> bool:
+        return jti in self.revoked
+
 
 @pytest.fixture
 def auth_client():
@@ -82,13 +139,12 @@ def auth_client():
 
 def registration_payload() -> dict[str, object]:
     return {
+        "student_name": "Test Student",
         "usn": "1AB23CS001",
         "password": "a-strong-password",
         "confirm_password": "a-strong-password",
         "college_email": "student@example.edu",
         "phone_number": "9876543210",
-        "year_of_admission": 2023,
-        "gender": "prefer-not-to-say",
         "branch": "Computer Science",
     }
 
@@ -106,6 +162,8 @@ def test_register_persists_only_password_hash_and_returns_safe_student(auth_clie
     assert "password_hash" not in body
     assert "confirm_password" not in body
     assert verify_password("a-strong-password", account.password_hash)
+    assert account.year_of_admission is None
+    assert account.gender is None
 
 
 def test_registration_rejects_mismatched_confirmation_without_echoing_password(
@@ -133,6 +191,89 @@ def test_registration_reports_duplicate_usn_as_conflict(auth_client):
     assert "USN" in duplicate.json()["detail"]
 
 
+def test_registration_reports_duplicate_college_email_as_conflict(auth_client):
+    client, _ = auth_client
+    payload = registration_payload()
+
+    assert client.post("/api/auth/register", json=payload).status_code == 201
+    duplicate = client.post(
+        "/api/auth/register",
+        json={**payload, "usn": "1AB23CS002"},
+    )
+
+    assert duplicate.status_code == 409
+    assert "college email" in duplicate.json()["detail"]
+
+
+def test_name_only_profile_patch_preserves_other_profile_fields(auth_client):
+    client, repository = auth_client
+    assert client.post("/api/auth/register", json=registration_payload()).status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"identifier": "1AB23CS001", "password": "a-strong-password"},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    before = next(iter(repository.accounts.values()))
+
+    response = client.patch(
+        "/api/auth/me",
+        headers=headers,
+        json={"student_name": "Updated Student"},
+    )
+
+    assert response.status_code == 200
+    account = next(iter(repository.accounts.values()))
+    assert account.student_name == "Updated Student"
+    assert account.college_email == before.college_email
+    assert account.usn == before.usn
+    assert account.phone_number == before.phone_number
+    assert account.branch == before.branch
+    assert account.role == before.role
+
+
+def test_profile_patch_rejects_restricted_fields_without_changes(auth_client):
+    client, repository = auth_client
+    assert client.post("/api/auth/register", json=registration_payload()).status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"identifier": "1AB23CS001", "password": "a-strong-password"},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    before = next(iter(repository.accounts.values()))
+
+    response = client.patch(
+        "/api/auth/me",
+        headers=headers,
+        json={
+            "student_name": "Attempted Student",
+            "college_email": "other@example.edu",
+            "usn": "2CD23CS002",
+            "phone_number": "1234567890",
+            "branch": "Other Branch",
+            "role": "ADMIN",
+        },
+    )
+
+    assert response.status_code == 422
+    account = next(iter(repository.accounts.values()))
+    assert account == before
+
+
+def test_profile_patch_rejects_empty_update(auth_client):
+    client, _ = auth_client
+    assert client.post("/api/auth/register", json=registration_payload()).status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"identifier": "1AB23CS001", "password": "a-strong-password"},
+    )
+    response = client.patch(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+        json={},
+    )
+    assert response.status_code == 422
+
+
 def test_login_issues_bearer_token_for_database_identity(auth_client):
     client, _ = auth_client
     registration = client.post("/api/auth/register", json=registration_payload())
@@ -140,7 +281,7 @@ def test_login_issues_bearer_token_for_database_identity(auth_client):
 
     login = client.post(
         "/api/auth/login",
-        json={"usn": "1AB23CS001", "password": "a-strong-password"},
+        json={"identifier": "1AB23CS001", "password": "a-strong-password"},
     )
     assert login.status_code == 200
     assert login.json()["token_type"] == "bearer"
@@ -158,7 +299,7 @@ def test_login_and_bearer_auth_reject_invalid_credentials_and_tokens(auth_client
     client, _ = auth_client
     bad_login = client.post(
         "/api/auth/login",
-        json={"usn": "missing", "password": "wrong"},
+        json={"identifier": "missing", "password": "wrong"},
     )
     no_token = client.get("/api/auth/me")
     invalid_token = client.get(
@@ -194,7 +335,7 @@ def test_booking_route_uses_authenticated_student_identity(auth_client):
         registration = client.post("/api/auth/register", json=registration_payload())
         login = client.post(
             "/api/auth/login",
-            json={"usn": "1AB23CS001", "password": "a-strong-password"},
+            json={"identifier": "1AB23CS001", "password": "a-strong-password"},
         )
         response = client.post(
             "/api/bookings",
@@ -259,7 +400,7 @@ def test_invalid_booking_time_never_reaches_coordinator(auth_client):
         client.post("/api/auth/register", json=registration_payload())
         login = client.post(
             "/api/auth/login",
-            json={"usn": "1AB23CS001", "password": "a-strong-password"},
+            json={"identifier": "1AB23CS001", "password": "a-strong-password"},
         )
         response = client.post(
             "/api/bookings",
@@ -290,7 +431,7 @@ def test_persistence_start_time_conflict_maps_to_http_conflict(auth_client):
         client.post("/api/auth/register", json=registration_payload())
         login = client.post(
             "/api/auth/login",
-            json={"usn": "1AB23CS001", "password": "a-strong-password"},
+            json={"identifier": "1AB23CS001", "password": "a-strong-password"},
         )
         response = client.post(
             "/api/bookings",
@@ -329,7 +470,7 @@ def test_booking_route_returns_structured_equipment_decision_required(auth_clien
         client.post("/api/auth/register", json=registration_payload())
         login = client.post(
             "/api/auth/login",
-            json={"usn": "1AB23CS001", "password": "a-strong-password"},
+            json={"identifier": "1AB23CS001", "password": "a-strong-password"},
         )
         response = client.post(
             "/api/bookings",
@@ -382,7 +523,7 @@ def test_booking_route_cancel_response_says_no_booking_was_created(auth_client):
         client.post("/api/auth/register", json=registration_payload())
         login = client.post(
             "/api/auth/login",
-            json={"usn": "1AB23CS001", "password": "a-strong-password"},
+            json={"identifier": "1AB23CS001", "password": "a-strong-password"},
         )
         response = client.post(
             "/api/bookings",
@@ -422,7 +563,7 @@ def test_booking_route_reports_committed_booking_if_cache_refresh_fails(auth_cli
         client.post("/api/auth/register", json=registration_payload())
         login = client.post(
             "/api/auth/login",
-            json={"usn": "1AB23CS001", "password": "a-strong-password"},
+            json={"identifier": "1AB23CS001", "password": "a-strong-password"},
         )
         response = client.post(
             "/api/bookings",
@@ -489,7 +630,7 @@ def test_booking_history_and_cancellation_routes_require_authenticated_owner(
         client.post("/api/auth/register", json=registration_payload())
         login = client.post(
             "/api/auth/login",
-            json={"usn": "1AB23CS001", "password": "a-strong-password"},
+            json={"identifier": "1AB23CS001", "password": "a-strong-password"},
         )
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
