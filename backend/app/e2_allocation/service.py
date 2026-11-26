@@ -31,6 +31,9 @@ from .equipment_models import (
     EquipmentReservation,
     EquipmentValidationResult,
 )
+from .equipment_validation import (
+    validate_equipment_request as validate_equipment_allocation_request,
+)
 from .models import AvailabilityInterval
 from .validation import (
     validate_block_availability,
@@ -168,6 +171,17 @@ class AllocationService(AllocationInterface):
             interval,
             self.equipment_cache,
             requested_quantity=requested_quantity,
+        )
+
+    def validate_equipment_request(
+        self,
+        request: EquipmentAllocationRequest,
+        current_datetime: datetime | None = None,
+    ) -> EquipmentValidationResult:
+        return validate_equipment_allocation_request(
+            request,
+            self.equipment_cache,
+            current_datetime=current_datetime,
         )
 
     def allocate_equipment(

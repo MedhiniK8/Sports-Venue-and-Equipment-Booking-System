@@ -1,25 +1,43 @@
 # Shared Interfaces
 
-The application is a layered modular monolith. E4 is the only browser-facing entry point, and E3 is the only module permitted to access MySQL.
+The current student booking workflow is implemented by E4 coordinating E1, E2,
+and E3. The detailed operation order and MySQL setup are documented in the
+[E2-to-E4 Integration Guide](../backend/app/e2_allocation/INTEGRATION_GUIDE.md).
 
 ## Engine responsibilities
 
-- **E1 — Concurrency:** owns interval-lock acquisition and release interfaces.
-- **E2 — Allocation:** owns time-slot validation, calendar generation, and post-commit split/merge interfaces.
-- **E3 — Persistence:** owns SQLAlchemy configuration, models, repositories, and async transaction management.
-- **E4 — Communication:** owns FastAPI routes and the booking coordinator boundary.
+- **E1 — Concurrency:** provides wait-aware interval-lock acquisition and token
+  release. Lock state is process-local.
+- **E2 — Allocation:** validates court and equipment availability and builds
+  derived in-memory availability from E3 snapshots.
+- **E3 — Persistence:** owns SQLAlchemy models, the physical `users` table,
+  repositories, MySQL migrations, and transaction boundaries.
+- **E4 — Communication:** owns authentication, student-facing HTTP APIs, and
+  orchestration across the other engines.
 
-## Planned workflow
+## Student booking contracts
 
-`User → E2 validate → E1 acquire → E3 transaction/commit → E2 split/merge → E4 calendar update → E1 release → confirmation`
+- Student identity is taken from the authenticated E4 context; the booking
+  request does not accept a user UUID.
+- Request times and E2 interval datetimes are naive `Asia/Kolkata` wall times.
+  Venue-local current-time decisions use the IANA `Asia/Kolkata` timezone.
+- Intervals are positive, minute-aligned, same-date, half-open intervals:
+  `[start, end)`. Court operating hours are 06:00–20:00.
+- Booking statuses are exactly `BOOKED` and `CANCELLED`. A decision-required
+  response is not a booking and has no status.
+- E2 checks availability before E1. E1 is released in `finally` after
+  acquisition. E3 commits before E2's authoritative snapshot is refreshed.
+- Cancellation uses the stored booking interval, performs owner/status/start
+  checks in E3, and keeps the booking and equipment allocation history.
 
-This is an interface plan only. E2 must not revalidate after E1 has acquired the interval.
+The generic `AllocationInterface` methods in
+`backend/app/contracts/interfaces.py` remain compatibility contracts; the
+student workflow uses `AllocationService`'s explicit availability and snapshot
+operations instead.
 
-## Shared rules
+## Verification boundary
 
-- Intervals are half-open: `[start, end)`.
-- Time precision is one minute.
-- Example operating hours are 06:00–20:00.
-- Equipment is optional.
-- User identity comes from authentication and is not accepted as a client input field.
-- Engine implementations must raise `NotImplementedError` until they are deliberately implemented in later work.
+SQLite and fake-based tests do not establish MySQL/InnoDB row-locking,
+constraint-enforcement, or production migration behavior. Apply migrations
+only to an explicitly approved database after reviewing its current revision
+and backing it up. No live database migration is implied by this document.

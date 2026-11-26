@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from ..contracts.booking import TimeInterval
+from ..venue_time import current_venue_local_naive
 from .equipment_cache import EquipmentCache
 from .equipment_interval_utils import (
     calculate_equipment_availability_segments,
@@ -62,7 +63,11 @@ def validate_equipment_interval(
             ],
         )
 
-    now = current_datetime or datetime.now()
+    now = (
+        current_datetime
+        if current_datetime is not None
+        else current_venue_local_naive()
+    )
     if now.utcoffset() is not None:
         return EquipmentValidationResult(
             valid=False,

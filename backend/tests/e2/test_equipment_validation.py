@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from app.contracts.booking import TimeInterval
+from app.e2_allocation import equipment_validation as equipment_validation_module
 from app.e2_allocation.equipment_cache import EquipmentCache
 from app.e2_allocation.equipment_models import (
     EquipmentAllocationRequest,
@@ -184,6 +185,23 @@ def test_past_date_and_started_interval_are_rejected():
         current_datetime=datetime(2026, 11, 23, 10),
     )
     assert started_result.valid is False
+
+
+def test_default_equipment_clock_uses_venue_local_time(monkeypatch):
+    cache = EquipmentCache()
+    monkeypatch.setattr(
+        equipment_validation_module,
+        "current_venue_local_naive",
+        lambda: datetime(2026, 11, 23, 19, 20),
+    )
+
+    result = validate_equipment_request(
+        request_for([], start=19, end=20),
+        cache,
+    )
+
+    assert result.valid is False
+    assert "already started or passed" in result.errors[0]
 
 
 def test_timezone_aware_current_datetime_is_rejected():

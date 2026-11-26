@@ -23,6 +23,7 @@ def get_engine() -> AsyncEngine:
         _engine = create_async_engine(
             get_settings().database_url,
             pool_pre_ping=True,
+            hide_parameters=True,
         )
     return _engine
 
@@ -39,7 +40,14 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 @asynccontextmanager
 async def transaction_session() -> AsyncIterator[AsyncSession]:
-    """Placeholders for E3 transaction management; no database operations are performed."""
     async with get_session_factory()() as session:
         async with session.begin():
             yield session
+
+
+async def dispose_engine() -> None:
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None

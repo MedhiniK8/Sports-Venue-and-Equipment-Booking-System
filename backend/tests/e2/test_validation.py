@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.contracts.booking import TimeInterval, ValidationResult
+from app.e2_allocation import validation as validation_module
 from app.e2_allocation.cache import AvailabilityCache
 from app.e2_allocation.models import AvailabilityInterval, AvailabilityStatus
 from app.e2_allocation.validation import validate_booking_availability
@@ -435,6 +436,31 @@ def test_accepts_interval_starting_one_minute_after_now():
     )
 
     assert result.valid is True
+
+
+def test_default_booking_clock_uses_venue_local_time(monkeypatch):
+    court_id = uuid4()
+    cache = AvailabilityCache()
+    cache.set_intervals(
+        court_id,
+        BOOKING_DATE,
+        [make_availability_interval(6, 0, 20, 0, AvailabilityStatus.FREE)],
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "current_venue_local_naive",
+        lambda: datetime(2026, 11, 23, 19, 20),
+    )
+
+    result = validate_booking_availability(
+        court_id,
+        BOOKING_DATE,
+        make_time_interval(19, 20, 19, 40),
+        cache,
+    )
+
+    assert result.valid is False
+    assert "already started or passed" in result.errors[0]
 
 
 def test_accepts_future_date_if_slot_is_free():

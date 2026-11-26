@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from ..contracts.booking import TimeInterval, ValidationResult
+from ..venue_time import current_venue_local_naive
 from .cache import AvailabilityCache
 from .interval_utils import find_interval_containing
 from .models import AvailabilityStatus
@@ -101,7 +102,11 @@ def _validate_availability(
         )
 
     if enforce_temporal:
-        now = current_datetime or datetime.now()
+        now = (
+            current_datetime
+            if current_datetime is not None
+            else current_venue_local_naive()
+        )
         if now.utcoffset() is not None:
             return ValidationResult(
                 valid=False,

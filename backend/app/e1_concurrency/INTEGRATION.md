@@ -191,18 +191,29 @@ If the calling task is cancelled, `finally` still runs while the coroutine can e
 ## H. Integration Workflow
 
 ```text
-E4 receives runtime request
-    -> E4 validates API/authentication
-    -> E4 calls E2 validation
-    -> E4 calls E1 acquire_with_wait(...)
-    -> E1 returns LockToken
-    -> E4 calls E3 protected transaction
-    -> E4 calls E1 release(token) in finally
-    -> E4 processes E2 synchronization/calendar/email as approved
+Booking:
+E4 authenticates and validates request
+    -> E2 initial court/equipment availability checks
+    -> [if continuing after shortage: fresh E3 snapshot and final E2 checks]
+    -> E1 acquire_with_wait(...)
+    -> E3 transaction and commit
+    -> E2 refresh from authoritative E3 snapshot
+    -> E1 release(token) in finally
+    -> E4 returns HTTP response
+
+Cancellation:
+E4 obtains persisted booking metadata for authenticated owner
+    -> E1 acquire_with_wait(...)
+    -> E3 ownership/status/start-time checks and atomic cancellation commit
+    -> E2 refresh from authoritative E3 snapshot
+    -> E1 release(token) in finally
     -> E4 returns HTTP response
 ```
 
-The lock remains held from successful acquisition until E4 calls release after E3 processing completes or fails.
+E2 checks happen before E1 acquisition. The booking lock remains held through the
+E3 commit and post-commit E2 refresh, and is released from `finally` on every
+path after acquisition. E3's transaction, unique slot-claim key, and equipment
+inventory row locks remain necessary because E1 state is process-local.
 
 E1 does not release the token automatically after an E3 call. E4 must include release in `finally`.
 
